@@ -30,9 +30,11 @@ class SoSMap():
     match_full_words_only = False
 
     def __init__(self, workdir):
+        self.initializing = True
         self.dataset = {}
         self._regexes_made = set()
         self.compiled_regexes = []
+        self.compiled_search = re.compile('(?!)')  # no match
         self.cname = self.__class__.__name__.lower()
         # workdir's default value '/tmp' is used just by avocado tests,
         # otherwise we override it to /etc/sos/cleaner (or map_file dir)
@@ -40,6 +42,8 @@ class SoSMap():
         self.cache_dir = os.path.join(self.workdir, 'cleaner_cache',
                                       self.cname)
         self.load_entries()
+        self.initializing = False
+        self.generate_compiled_regexes()
 
     def load_entries(self):
         """ Load cached entries from the disk. This method must be called when
@@ -69,11 +73,17 @@ class SoSMap():
                 return True
         return False
 
+    def insert_to_dataset(self, item, value):
+        self.dataset[item] = value
+
     def add_sanitised_item_to_dataset(self, item):
         try:
-            self.dataset[item] = self.sanitize_item(item)
+            self.insert_to_dataset(item, self.sanitize_item(item))
         except Exception:
-            self.dataset[item] = item
+            # we failed to obfuscate the item as it is not a real IP address
+            # or hostname or similar. Let return the original string and keep
+            # the item->item "mapping" in dataset to save time the next time.
+            self.insert_to_dataset(item, item)
         if self.compile_regexes:
             self.add_regex_item(item)
 
@@ -137,11 +147,18 @@ class SoSMap():
         if self.ignore_item(item):
             return
         if item not in self._regexes_made:
+            # we do re.I everywhere, so unify the item
+            item = item.lower()
             # save the item in a set to avoid clobbering existing regexes,
             # as searching this set is significantly faster than searching
             # through the actual compiled_regexes list, especially for very
             # large collections of entries
             self._regexes_made.add(item)
+            # don't iteratively build compiled_regexes and compiled_search
+            # during initialisation, that is redundant;
+            # generate_compiled_regexes is called at the end of init
+            if self.initializing:
+                return
             # add the item, Pattern tuple directly to the compiled_regexes list
             # and then sort the existing list, rather than rebuild the list
             # from scratch every time we add something like we would do if we
@@ -149,6 +166,28 @@ class SoSMap():
             # the set above
             self.compiled_regexes.append((item, self.get_regex_result(item)))
             self.compiled_regexes.sort(key=lambda x: len(x[0]), reverse=True)
+            self.generate_compiled_regexes(only_search=True)
+
+    def generate_compiled_regexes(self, only_search=False):
+        keys = sorted(self._regexes_made, key=len, reverse=True)
+        if not only_search:
+            self.compiled_regexes = [
+                (item, self.get_regex_result(item)) for item in keys
+            ]
+        pattern = "|".join([f'{self.get_regex_escape(k)}' for k in keys])
+        self.compiled_search = re.compile(
+            self.get_regex_fullword(pattern),
+            flags=re.I
+        )
+
+    def get_regex_escape(self, item):
+        return rf'{re.escape(item)}'
+
+    def get_regex_fullword(self, item):
+        item = rf'(?:{item})'
+        if self.match_full_words_only:
+            return rf'(?<![a-z0-9]){item}(?=\b|_|-)'
+        return item
 
     def get_regex_result(self, item):
         """Generate the object/value that is used by the parser when iterating

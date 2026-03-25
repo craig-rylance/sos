@@ -116,6 +116,8 @@ class OpenVSwitch(Plugin):
             f"{self.vctl} -t 5 list bridge",
             # Capture OVS datapath list
             f"{self.vctl} -t 5 list datapath",
+            # Capture BFD status for OVN chassis
+            f"{self.actl} bfd/show",
             # Capture DPDK queue to pmd mapping
             f"{self.actl} dpif-netdev/pmd-rxq-show -secs 5",
             f"{self.actl} dpif-netdev/pmd-rxq-show -secs 30",
@@ -346,7 +348,8 @@ class OpenVSwitch(Plugin):
             0x06: "OpenFlow15",
         }
 
-        ofp_ver_result = self.collect_cmd_output(f"{self.vctl} -t 5 --version")
+        ofp_ver_result = self.collect_cmd_output(
+            f"{self.ofctl} -t 5 --version")
 
         # List protocols currently in use, if any
         br_info = self.collect_cmd_output(
